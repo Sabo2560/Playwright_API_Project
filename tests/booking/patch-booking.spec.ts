@@ -38,7 +38,7 @@ test.describe('Partial Update Booking (PATCH)', () => {
     }) => {
       // 1. Create the booking only if this row expects it to exist; otherwise use an out-of-range id
       const id = bookingExists ? (await createBooking()).id : 999999999;
-      const headers = validAuth ? { Cookie: `token=${authToken}` } : {};
+      const headers: Record<string, string> = validAuth ? { Cookie: `token=${authToken}` } : {};
 
       // 2. Send PATCH /booking/:id with a single-field payload per this row's combination
       const res = await request.patch(`/booking/${id}`, {

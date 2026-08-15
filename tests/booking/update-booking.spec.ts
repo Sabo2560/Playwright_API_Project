@@ -54,7 +54,7 @@ test.describe('Update Booking (PUT)', () => {
     }) => {
       // 1. Create the booking only if this row expects it to exist; otherwise use an out-of-range id
       const id = bookingExists ? (await createBooking()).id : 999999999;
-      const headers = validAuth ? { Cookie: `token=${authToken}` } : {};
+      const headers: Record<string, string> = validAuth ? { Cookie: `token=${authToken}` } : {};
 
       // 2. Send PUT /booking/:id per this row's auth/existence combination
       const res = await request.put(`/booking/${id}`, {
