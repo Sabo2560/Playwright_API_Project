@@ -32,4 +32,18 @@ test.describe('List Bookings', () => {
     const noMatchBody = await noMatchRes.json();
     expect(noMatchBody).not.toEqual(expect.arrayContaining([{ bookingid: id }]));
   });
+
+  test.fixme(
+    'returns a client error for a malformed checkin date filter, not a 500',
+    async ({ request }) => {
+      // Known defect, confirmed live via
+      // `curl "http://localhost:3001/booking?checkin=not-a-date"` -> 500 Internal Server Error.
+      // The route parses `checkin`/`checkout` via `new Date(req.query.checkin)` with no
+      // validation, so an unparseable value throws instead of producing a 400. This test
+      // encodes the correct expected behavior and is marked fixme pending a fix upstream —
+      // flip to a live assertion once the route validates its date input.
+      const res = await request.get('/booking?checkin=not-a-date');
+      expect(res.status()).toBe(400);
+    }
+  );
 });

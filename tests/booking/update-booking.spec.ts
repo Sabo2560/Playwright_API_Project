@@ -66,6 +66,20 @@ test.describe('Update Booking (PUT)', () => {
     });
   }
 
+  test('rejects a garbage/unrecognized token, not just a missing one', async ({ request, createBooking }) => {
+    // A present-but-invalid token is a different equivalence class from no token at all —
+    // the route looks it up in an in-memory session map, so an unrecognized value and an
+    // absent one take different code paths even though both currently return 403.
+    const { id } = await createBooking();
+
+    const res = await request.put(`/booking/${id}`, {
+      data: validBookingPayload(),
+      headers: { Cookie: 'token=this-token-was-never-issued' },
+    });
+
+    expect(res.status()).toBe(403);
+  });
+
   test('rejects update with a missing required field', async ({ request, createBooking, authToken }) => {
     // 1. Create a booking, obtain a token (setup)
     const { id } = await createBooking();

@@ -23,6 +23,9 @@ test.describe('Create Booking', () => {
     expect(res.status()).toBe(200);
     const body = await res.json();
     expect(body.booking).toMatchObject(payload);
+    // toMatchObject alone would still pass if the API leaked a stray additionalneeds
+    // value, since it only checks listed keys — assert its actual absence explicitly.
+    expect(body.booking).not.toHaveProperty('additionalneeds');
 
     trackForCleanup(body.bookingid);
   });

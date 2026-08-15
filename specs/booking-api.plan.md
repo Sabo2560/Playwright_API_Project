@@ -100,12 +100,15 @@ Known real behaviors worth testing deliberately (found in source, not assumed):
 
 **File:** `tests/booking/create-booking.spec.ts`
 **Technique:** EP (optional field omitted)
+**Reconciled after review:** live check confirms `additionalneeds` is fully omitted from the response, not an
+empty string. Original expectation was correct but the generated assertion (`toMatchObject`) didn't actually
+verify absence, since it ignores unlisted keys — tightened to assert absence explicitly.
 
 **Steps:**
   1. Send `POST /booking` with all required fields but no `additionalneeds`
     - expect: status is `200`
-    - expect: response body's `booking` object matches the sent fields; `additionalneeds` is absent or empty,
-      not an error
+    - expect: response body's `booking` object matches the sent fields
+    - expect: response body's `booking` object does not have an `additionalneeds` key at all
 
 #### 3.3. rejects-payload-missing-a-required-field
 
@@ -205,6 +208,22 @@ locks in current behavior rather than assuming rejection.
   1. Send `GET /booking/:id` with an id far outside any id created by this suite (e.g. `999999999`)
     - expect: status is `404`
 
+#### 4.5. rejects-malformed-checkin-date-filter (defect found in review, not originally planned)
+
+**File:** `tests/booking/get-bookings.spec.ts`
+**Technique:** BVA (invalid-type class for a query param) — added after a senior review pass verified live
+API behavior for an input class the original plan didn't cover.
+**Priority:** Medium (input validation gap, not auth/data-integrity, but a live 500 is a real defect)
+
+**Status:** Real defect, not a test bug. Confirmed live: `checkin=not-a-date` produces `500 Internal Server
+Error`, not a `400`. The route parses the value via `new Date(...)` with no validation. Test is marked
+`test.fixme()` encoding the *correct* expected behavior (`400`), pending an upstream fix — not weakened to
+assert the current buggy `500`, per the healing workflow's rule against hiding a real regression.
+
+**Steps:**
+  1. Send `GET /booking?checkin=not-a-date`
+    - expect: status is `400` (currently fails — actual is `500`; see Status above)
+
 ---
 
 ### 5. Full Update — `PUT /booking/:id`
@@ -252,6 +271,19 @@ locks in current behavior rather than assuming rejection.
 auth", then send `PUT /booking/:id` (using a fabricated far-out-of-range id when "Booking exists" is No)
     - expect: status matches the table exactly
 
+#### 5.5. rejects-garbage-token-distinct-from-missing-token (added after review)
+
+**File:** `tests/booking/update-booking.spec.ts`
+**Technique:** EP — a present-but-unrecognized token is a distinct equivalence class from no token at all;
+5.3's "No" auth rows only tested total absence. Both classes currently return `403` (verified live), but
+they exercise different branches of `globalLogins[req.cookies.token]` (undefined lookup vs. a real-but-wrong
+key), so a future change could regress one without the other.
+
+**Steps:**
+  1. Create a booking (setup)
+  2. Send `PUT /booking/:id` with `Cookie: token=this-token-was-never-issued`
+    - expect: status is `403`
+
 #### 5.4. rejects-update-with-missing-required-field
 
 **File:** `tests/booking/update-booking.spec.ts`
@@ -297,6 +329,16 @@ auth", then send `PUT /booking/:id` (using a fabricated far-out-of-range id when
 **Steps:** same structure as 5.3, using PATCH with a single-field payload
     - expect: status matches the table exactly
 
+#### 6.3. rejects-garbage-token-distinct-from-missing-token (added after review)
+
+**File:** `tests/booking/patch-booking.spec.ts`
+**Technique:** EP — same rationale as 5.5, applied to PATCH's identical auth branch.
+
+**Steps:**
+  1. Create a booking (setup)
+  2. Send `PATCH /booking/:id` with `Cookie: token=this-token-was-never-issued`
+    - expect: status is `403`
+
 ---
 
 ### 7. Delete Booking — `DELETE /booking/:id`
@@ -330,6 +372,16 @@ auth", then send `PUT /booking/:id` (using a fabricated far-out-of-range id when
 **Steps:** for each row, create the booking only if "Booking exists" is Yes, obtain/omit a token per "Valid
 auth", then send `DELETE /booking/:id`
     - expect: status matches the table exactly
+
+#### 7.4. rejects-garbage-token-distinct-from-missing-token (added after review)
+
+**File:** `tests/booking/delete-booking.spec.ts`
+**Technique:** EP — same rationale as 5.5, applied to DELETE's identical auth branch.
+
+**Steps:**
+  1. Create a booking (setup)
+  2. Send `DELETE /booking/:id` with `Cookie: token=this-token-was-never-issued`
+    - expect: status is `403`
 
 #### 7.3. state-transition-double-delete-fails
 

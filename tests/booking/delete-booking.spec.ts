@@ -41,6 +41,19 @@ test.describe('Delete Booking', () => {
     });
   }
 
+  test('rejects a garbage/unrecognized token, not just a missing one', async ({ request, createBooking }) => {
+    // A present-but-invalid token is a different equivalence class from no token at all —
+    // the route looks it up in an in-memory session map, so an unrecognized value and an
+    // absent one take different code paths even though both currently return 403.
+    const { id } = await createBooking();
+
+    const res = await request.delete(`/booking/${id}`, {
+      headers: { Cookie: 'token=this-token-was-never-issued' },
+    });
+
+    expect(res.status()).toBe(403);
+  });
+
   test('deleting an already-deleted booking fails on the second attempt', async ({
     request,
     createBooking,

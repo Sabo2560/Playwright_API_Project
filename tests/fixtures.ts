@@ -1,5 +1,7 @@
 import { test as base, expect } from '@playwright/test';
 
+export const ADMIN_CREDENTIALS = { username: 'admin', password: 'password123' };
+
 export type BookingPayload = {
   firstname: string;
   lastname: string;
@@ -40,9 +42,7 @@ type Fixtures = {
 
 export const test = base.extend<Fixtures>({
   authToken: async ({ request }, use) => {
-    const res = await request.post('/auth', {
-      data: { username: 'admin', password: 'password123' },
-    });
+    const res = await request.post('/auth', { data: ADMIN_CREDENTIALS });
     const { token } = await res.json();
     await use(token);
   },
@@ -57,9 +57,7 @@ export const test = base.extend<Fixtures>({
     });
 
     if (createdIds.length > 0) {
-      const authRes = await request.post('/auth', {
-        data: { username: 'admin', password: 'password123' },
-      });
+      const authRes = await request.post('/auth', { data: ADMIN_CREDENTIALS });
       const { token } = await authRes.json();
       for (const id of createdIds) {
         await request.delete(`/booking/${id}`, { headers: { Cookie: `token=${token}` } }).catch(() => {});
