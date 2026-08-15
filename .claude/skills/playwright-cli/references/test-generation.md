@@ -143,6 +143,12 @@ await expect(page.getByRole('navigation')).toMatchAriaSnapshot(`
 
 Goal: produce a spec file (e.g. `specs/<feature>.plan.md`) that enumerates the scenarios to test. **Always** write the spec to a file.
 
+### 1.0 Check existing coverage first
+
+Before exploring, check `specs/` and `tests/` (`Glob`/`Grep`) for plans or tests that already cover this area. If
+found, extend/reference the existing plan rather than duplicating it, or explicitly note in the new plan which
+scenarios are new versus already covered elsewhere.
+
 ### 1.1 Prerequisite: workspace
 
 Check the workspace has Playwright installed before anything else:
@@ -228,6 +234,14 @@ Map out:
 - Persistence: reload, local/session storage, URL fragments.
 - Navigation: which controls change the URL, back/forward behaviour.
 
+Use `playwright-cli requests` while exploring to note whether each feature is backed by a real network call or is
+purely client-side. Record this in the plan — it determines whether API-level test coverage ([api-testing.md](api-testing.md))
+is applicable at all, and prevents generating a test that assumes an API exists where there isn't one.
+
+When a feature's exact behavior isn't obvious from one interaction (a randomized delay, a default state, what a
+control does when triggered), interact with it more than once to confirm before writing it into the plan as fact.
+If still ambiguous after that, mark it explicitly in the plan rather than guessing.
+
 **Important**: Do not just open the app url with playwright-cli, always go through the test to capture any custom setup done there.
 **Important**: Stop the background test when done exploring.
 
@@ -251,10 +265,11 @@ Save under `specs/<feature>.plan.md`. Use this structure:
 #### 1.1. <kebab-case-scenario-name>
 
 **File:** `tests/<group>/<kebab-case-scenario-name>.spec.ts`
+**Priority:** <Critical / High / Medium / Low>
 
 **Steps:**
   1. <Concrete user step>
-    - expect: <observable outcome>
+    - expect: <observable outcome, precise enough that no one has to guess what "correct" means>
     - expect: <another observable outcome>
   2. <Next step>
     - expect: <outcome>
@@ -275,6 +290,17 @@ Guidelines:
 - Cover happy path, edge cases, validation, negative flows, persistence.
 - Write steps at the user level ("Type 'Buy milk' into the input"), not the API level ("call `fill`").
 - Put observable outcomes in `- expect:` bullets; each becomes an assertion during generation.
+- **Tag each scenario's priority** (Critical / High / Medium / Low) based on the impact of that flow breaking —
+  risk-based, not a flat list. Data-integrity and core-transaction paths outrank cosmetic or rarely-used ones.
+- **Every expected outcome must be specific and verifiable.** "Verify the total is correct" is not sufficient —
+  state what "correct" means precisely enough that generation doesn't have to guess, e.g. "the displayed total
+  equals the sum of (quantity × price) across all rows." A vague outcome forces the generator to either hardcode
+  today's observed value (proves nothing about the underlying logic) or write a weak assertion that passes
+  regardless of behavior.
+- For any input with more than 2-3 meaningful states or combinations (e.g. multiple filters applied together),
+  consider whether a decision table would surface combinations a flat scenario list would miss.
+- State starting-state assumptions explicitly (always assume blank/fresh state), and say so if the actual default
+  couldn't be confirmed during exploration rather than assuming a plausible-sounding one.
 
 ---
 
@@ -313,7 +339,9 @@ playwright-cli click e7
 
 For each `- expect:` bullet, add an explicit assertion. See [How generation works](#0-how-generation-works) for details.
 
-Collect the generated code and write the test file at the path given in the spec:
+Collect the generated code and write it into the test file at the path given in the spec's group — if the file
+already has a `test.describe()` for this group from a prior scenario, add this scenario as a new `test()` inside
+that same block rather than starting a new file or a duplicate `describe()`:
 
 ```ts
 // spec: specs/basic-operations.plan.md
@@ -346,6 +374,21 @@ Rules:
 - Use the describe group name verbatim from the spec (no `1.` ordinal).
 - Import from `./fixtures` if the project has one; otherwise `@playwright/test`.
 - **Important**: close the CLI session and stop the background test before moving to the next scenario.
+
+### 2.2.1 Assertion quality (do not skip this)
+
+- Every assertion must be capable of catching a real regression. Before writing one, ask: "if the feature broke,
+  would this actually fail?" Reject assertions that pass regardless of behavior, such as `not.toBe('')`,
+  `toBeGreaterThanOrEqual(0)` on a value that's always non-negative, or checking mere existence when the scenario
+  is about state or content.
+- Where the expected value can be derived from data already on the page (totals, counts, sorted order, computed
+  fields), derive it programmatically rather than hardcoding an observed snapshot value. A hardcoded expected
+  value only proves the page matches today's snapshot, not that the underlying logic is correct.
+- Prefer specific, state-verifying assertions (`toHaveText`, `toBeChecked`, `toHaveValue`, `toHaveAttribute`) over
+  vague presence checks, whenever the scenario is about a specific state or value rather than mere existence.
+- One file per test **suite**, not per scenario: all scenarios belonging to the same top-level plan group share one
+  `test.describe()` block in one file, as separate `test()` entries — don't fragment a suite across files or repeat
+  the same `describe()` wrapper in several files.
 
 ### 2.3 Generate multiple scenarios
 
@@ -398,11 +441,35 @@ Common causes: selector drift, new wrapper element, label/ARIA rename, timing (t
 
 Rehearse the corrected interaction with `playwright-cli` — the generated code in the output is what you paste back into the test.
 
+### 3.2.1 Classify before fixing (do not skip this)
+
+Every failure is one of two kinds, and they require opposite responses:
+
+- **Test bug** — the test's selector, timing, or setup is wrong, but the app itself behaves correctly. → Fix the test.
+- **Real regression** — the app's actual behavior changed or is wrong (bad computed value, broken interaction,
+  changed/missing element, content that doesn't match what the feature is supposed to do), and the test correctly
+  caught it. → Do **not** edit the test to match the broken behavior. Leave the assertion as-is, mark the test
+  `test.fixme()`, and add a comment stating what you observed instead of the expected behavior so a human can
+  triage it as a product bug.
+
+Never weaken an assertion just to make it pass (turning an exact/computed expected value into a looser check like
+`toBeGreaterThan(0)`, `not.toBe('')`, or a broader regex) unless you've confirmed the looser check is what the
+scenario actually intends to verify. A fix that only stops the failure, without confirming the app still does what
+the plan describes, is coverage loss disguised as a pass — that regression will never be caught again.
+
+If unsure which kind it is, treat it as a possible regression: apply `test.fixme()` with a clear comment rather
+than guessing at a fix.
+
 ### 3.3 Apply the fix
 
-Edit the test file: update the locator, assertion, step order, or inputs to match the corrected behaviour. Stop the background debug run. Rerun the single test to confirm green.
+For confirmed test bugs, edit the test file: update the locator, assertion, step order, or inputs to match the
+corrected behaviour. Stop the background debug run. Rerun the single test to confirm green.
 
 Never skip hooks or add sleeps as a fix. Never use `networkidle`.
+
+Cap yourself at 5 fix attempts per test. If it still fails after 5 attempts, stop, apply `test.fixme()` with a
+comment summarizing what was tried and what remains unresolved, and move to the next failing test rather than
+looping indefinitely.
 
 ### 3.4 Reconcile with the spec
 
@@ -421,6 +488,17 @@ Only after the user answers, either update the spec (intentional change) or file
 
 - Fix failures one at a time; rerun after each.
 - If after thorough investigation you are confident the test is correct but the app is wrong *and* the user has confirmed it's a bug: mark the test `test.fixme(...)` with a comment pointing at the user's decision or issue link. Never silently skip.
+
+### 3.6 End-of-run summary (required)
+
+After processing all failing tests, produce a short summary listing, for each test touched:
+
+- Whether it was classified as a test bug (fixed) or a possible regression (`test.fixme()`)
+- One line on the root cause
+- The file and line changed, if any
+
+This is what a human reviewer reads before merging — it must be enough for them to decide whether to trust each
+fix without re-debugging it themselves.
 
 ---
 
