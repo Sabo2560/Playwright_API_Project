@@ -3,6 +3,11 @@ name: API Tests
 on:
   push:
   workflow_dispatch:
+  schedule:
+    # Daily regression run at 06:00 UTC — catches drift independent of push activity,
+    # e.g. if restful-booker's Docker image changes upstream, or one of the documented
+    # test.fixme() defects gets silently fixed/regressed further.
+    - cron: '0 6 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
