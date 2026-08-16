@@ -1,5 +1,6 @@
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect, request as apiRequest } from '@playwright/test';
 
+export const BASE_URL = 'http://localhost:3001';
 export const ADMIN_CREDENTIALS = { username: 'admin', password: 'password123' };
 
 export type BookingPayload = {
@@ -72,28 +73,42 @@ type Fixtures = {
   createBooking: (overrides?: Partial<BookingPayload>) => Promise<{ id: number; payload: BookingPayload }>;
 };
 
-export const test = base.extend<Fixtures>({
-  authToken: async ({ request }, use) => {
-    const res = await request.post('/auth', { data: ADMIN_CREDENTIALS });
-    const { token } = await res.json();
-    await use(token);
+type WorkerFixtures = {
+  sharedAuthToken: string;
+};
+
+export const test = base.extend<Fixtures, WorkerFixtures>({
+  // Worker-scoped: one POST /auth per worker process instead of one per test. Safe because
+  // tests/security/token-lifecycle.spec.ts directly verifies restful-booker tokens have no
+  // expiry and remain valid across unlimited reuse — sharing one token across every test in
+  // a worker doesn't weaken any test's isolation, since auth state isn't what's under test
+  // in the tests that merely *use* this token to set up or tear down a booking.
+  sharedAuthToken: [
+    async ({}, use) => {
+      const context = await apiRequest.newContext({ baseURL: BASE_URL });
+      const res = await context.post('/auth', { data: ADMIN_CREDENTIALS });
+      const { token } = await res.json();
+      await context.dispose();
+      await use(token);
+    },
+    { scope: 'worker' },
+  ],
+
+  authToken: async ({ sharedAuthToken }, use) => {
+    await use(sharedAuthToken);
   },
 
   // Register a booking id for best-effort deletion after the test, regardless of how it was created.
   // Keeps every test's own cleanup to a one-line call instead of repeating auth+delete boilerplate.
-  trackForCleanup: async ({ request }, use) => {
+  trackForCleanup: async ({ request, sharedAuthToken }, use) => {
     const createdIds: number[] = [];
 
     await use((bookingId: number) => {
       createdIds.push(bookingId);
     });
 
-    if (createdIds.length > 0) {
-      const authRes = await request.post('/auth', { data: ADMIN_CREDENTIALS });
-      const { token } = await authRes.json();
-      for (const id of createdIds) {
-        await request.delete(`/booking/${id}`, { headers: { Cookie: `token=${token}` } }).catch(() => {});
-      }
+    for (const id of createdIds) {
+      await request.delete(`/booking/${id}`, { headers: { Cookie: `token=${sharedAuthToken}` } }).catch(() => {});
     }
   },
 
