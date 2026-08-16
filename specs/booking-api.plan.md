@@ -396,6 +396,174 @@ auth", then send `DELETE /booking/:id`
 
 ---
 
+## Extension: full functional and content-type coverage
+
+Added after re-reading `helpers/parser.js` and `app.js` in full (not just `routes/index.js` and the
+validator, which is all the original plan drew from) and verifying every claim below live. This closes the
+gap between "CRUD + auth is covered" and "the full functional surface of this API is covered" — the
+existing groups 1–7 stay valid and are not duplicated here.
+
+Key discovery: response formatting (`helpers/parser.js`) does silent type coercion on the way *out* of the
+API (`Boolean(depositpaid)`, `parseInt(totalprice)`, `date.format(new Date(checkin), ...)`), and switches
+entirely on the `Accept` header, with an unrecognized value falling through to a literal `418 I'm a teapot`.
+None of this is exercised by groups 1–7, which only ever send `Accept: application/json` implicitly.
+
+### 8. Content-Type and Accept Header Handling
+
+**Priority:** Medium (real, documented, supported functionality — XML/urlencoded aren't edge cases here,
+they're advertised in the API's own apidoc)
+
+#### 8.1. creates-booking-via-xml-content-type
+
+**File:** `tests/booking/content-types.spec.ts`
+**Technique:** EP (alternate valid input-encoding class)
+
+**Steps:**
+  1. Send `POST /booking` with `Content-Type: text/xml` and an XML body equivalent to the standard valid
+     payload
+    - expect: status is `200`
+    - expect: response body (JSON, since `Accept` defaults to `*/*`) reflects the same field values as the
+      XML payload sent
+
+#### 8.2. creates-booking-via-urlencoded-content-type
+
+**File:** `tests/booking/content-types.spec.ts`
+**Technique:** EP (alternate valid input-encoding class)
+
+**Steps:**
+  1. Send `POST /booking` with `Content-Type: application/x-www-form-urlencoded` and a form-encoded body
+     equivalent to the standard valid payload
+    - expect: status is `200`
+    - expect: response body reflects the same field values as the form-encoded payload sent
+
+#### 8.3. returns-xml-response-body-when-accept-is-xml
+
+**File:** `tests/booking/content-types.spec.ts`
+**Technique:** EP (valid class, response-format axis independent of request encoding)
+**Reconciled after review:** split into two scenarios (8.3 and 8.3.1) — the XML body content is genuinely
+correct, but the `Content-Type` header is not (see 8.3.1), so folding both into one assertion set would
+have hidden a real defect behind a body-content check that happened to pass.
+
+**Steps:**
+  1. Create a booking (setup, JSON)
+  2. Send `GET /booking/:id` with `Accept: application/xml`
+    - expect: status is `200`
+    - expect: response body is a well-formed `<booking>` XML document containing the same field values as
+      the created booking
+
+#### 8.3.1. mislabels-xml-response-content-type-header (defect found in review, not originally planned)
+
+**File:** `tests/booking/content-types.spec.ts`
+**Technique:** exploratory — found while verifying 8.3 live.
+**Status:** Real defect, not a test bug. Confirmed via `curl -D -`: the response `Content-Type` is
+`text/html; charset=utf-8` even though the body is genuine XML. The route builds the XML string via
+`js2xmlparser` but never calls `res.type('xml')` before `res.send(xmlString)`, so Express defaults the
+header based on the JS value type (string → `text/html`). Test encodes the correct expected behavior and is
+marked `test.fixme()`.
+
+**Steps:**
+  1. Create a booking (setup)
+  2. Send `GET /booking/:id` with `Accept: application/xml`
+    - expect: `Content-Type` response header contains `xml` (currently fails — actual is `text/html`)
+
+#### 8.4. returns-418-for-unrecognized-accept-header
+
+**File:** `tests/booking/content-types.spec.ts`
+**Technique:** BVA (accept-header value outside the four recognized cases:
+`application/json` / `application/xml` / `application/x-www-form-urlencoded` / `*/*`) — confirmed live on
+both `GET /booking/:id` and `POST /booking`; the parser's `default:` case returns `null`, and the route
+treats a falsy parse result as `418`.
+
+**Steps:**
+  1. Create a booking (setup)
+  2. Send `GET /booking/:id` with `Accept: text/html`
+    - expect: status is `418`
+  3. Send `POST /booking` with a valid payload and `Accept: text/html`
+    - expect: status is `418`
+
+---
+
+### 9. Response Formatting / Type Coercion (defects and quirks found in review)
+
+**Priority:** High — these aren't obscure edge cases; they mean the API can silently return data that
+doesn't match what was sent, which is exactly the kind of defect functional testing exists to catch
+(ISTQB principle: "absence of errors" is not correctness — see [api-testing.md](../.claude/skills/playwright-cli/references/api-testing.md) §0).
+
+#### 9.1. coerces-truthy-string-depositpaid-to-true
+
+**File:** `tests/booking/response-coercion.spec.ts`
+**Technique:** BVA — `depositpaid` is passed through `Boolean(x)` on the way out, so *any* non-empty string
+is truthy in JavaScript, including the string `"false"`. Confirmed live: sending `depositpaid: "false"`
+(string) returns `depositpaid: true` in the response.
+**Status:** Real defect, not a test bug — this is exactly the kind of boolean-string-coercion bug BVA exists
+to catch. Test encodes the *correct* expected behavior and is marked `test.fixme()`.
+
+**Steps:**
+  1. Send `POST /booking` with `depositpaid: "false"` (string, not boolean)
+    - expect: response body's `booking.depositpaid` is `false` (currently fails — actual is `true`)
+
+#### 9.2. coerces-empty-string-depositpaid-to-false
+
+**File:** `tests/booking/response-coercion.spec.ts`
+**Technique:** BVA (boundary of the same coercion — the one case that *does* work correctly, since
+`Boolean('')` is `false`) — this scenario locks in correct behavior at the boundary, complementing 9.1.
+
+**Steps:**
+  1. Send `POST /booking` with `depositpaid: ""` (empty string)
+    - expect: status is `200`
+    - expect: response body's `booking.depositpaid` is `false`
+
+#### 9.3. silently-corrupts-invalid-checkin-on-create
+
+**File:** `tests/booking/response-coercion.spec.ts`
+**Technique:** BVA (invalid-date class, same input family as 3.5 but for create/update's *response*
+formatting rather than the query-filter route from §4.5) — confirmed live: an invalid `checkin` string is
+not rejected; it comes back as a garbage value like `"0NaN-aN-aN"`.
+**Status:** Real defect — silent data corruption is worse than the 500 in §4.5, since callers get a `200`
+and may not notice the field is garbage. Test encodes the correct expected behavior and is marked
+`test.fixme()`.
+
+**Steps:**
+  1. Send `POST /booking` with `bookingdates.checkin: "not-a-date"` and all other fields valid
+    - expect: status is `400` (currently fails — actual is `200` with a corrupted `checkin` value)
+
+#### 9.4. truncates-decimal-totalprice-via-parseint
+
+**File:** `tests/booking/response-coercion.spec.ts`
+**Technique:** BVA — `totalprice` is passed through `parseInt(x)` on the way out, which truncates decimals
+rather than rejecting them or rounding.
+
+**Steps:**
+  1. Send `POST /booking` with `totalprice: 150.75`
+    - expect: status is `200`
+    - expect: response body's `booking.totalprice` is `150` (truncated, not rounded, not rejected)
+
+---
+
+### 10. Routing / Cross-cutting
+
+**Priority:** Low (generic Express behavior, not booking-specific business logic, but cheap to lock in)
+
+#### 10.1. returns-404-for-a-completely-unknown-route
+
+**File:** `tests/booking/routing.spec.ts`
+**Technique:** exploratory
+
+**Steps:**
+  1. Send `GET /this-route-does-not-exist`
+    - expect: status is `404`
+
+#### 10.2. returns-404-for-an-unsupported-method-on-a-known-path
+
+**File:** `tests/booking/routing.spec.ts`
+**Technique:** exploratory (method not in `{GET, POST, PUT, PATCH, DELETE}` on `/booking`)
+
+**Steps:**
+  1. Send `TRACE /booking`
+    - expect: status is `404`
+
+---
+
 ## Cross-references
 
 - Generation and healing process: [../.claude/skills/playwright-cli/references/api-testing.md](../.claude/skills/playwright-cli/references/api-testing.md)

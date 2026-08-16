@@ -34,6 +34,38 @@ export function payloadMissing(field: string): Record<string, unknown> {
   return payload;
 }
 
+/** Serializes a booking payload as the XML body shape restful-booker expects. */
+export function bookingToXml(payload: BookingPayload): string {
+  const needsTag =
+    payload.additionalneeds !== undefined ? `<additionalneeds>${payload.additionalneeds}</additionalneeds>` : '';
+  return `<booking>
+  <firstname>${payload.firstname}</firstname>
+  <lastname>${payload.lastname}</lastname>
+  <totalprice>${payload.totalprice}</totalprice>
+  <depositpaid>${payload.depositpaid}</depositpaid>
+  <bookingdates>
+    <checkin>${payload.bookingdates.checkin}</checkin>
+    <checkout>${payload.bookingdates.checkout}</checkout>
+  </bookingdates>
+  ${needsTag}
+</booking>`;
+}
+
+/** Serializes a booking payload as an application/x-www-form-urlencoded body. */
+export function bookingToFormEncoded(payload: BookingPayload): string {
+  const params = new URLSearchParams();
+  params.set('firstname', payload.firstname);
+  params.set('lastname', payload.lastname);
+  params.set('totalprice', String(payload.totalprice));
+  params.set('depositpaid', String(payload.depositpaid));
+  params.set('bookingdates[checkin]', payload.bookingdates.checkin);
+  params.set('bookingdates[checkout]', payload.bookingdates.checkout);
+  if (payload.additionalneeds !== undefined) {
+    params.set('additionalneeds', payload.additionalneeds);
+  }
+  return params.toString();
+}
+
 type Fixtures = {
   authToken: string;
   trackForCleanup: (bookingId: number) => void;
